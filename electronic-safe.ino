@@ -202,9 +202,15 @@ void runUncertaintyAnalysis() {
   float pDeploy = (float)passDeploy / (float)MC_TRIALS;
   float pRetract = (float)passRetract / (float)MC_TRIALS;
 
+  unsigned long nominalDeploy =
+  computeDeployTimeMs((float)cfg.pump_latency_ms,
+                      cfg.actuator_speed_mm_per_100ms,
+                      cfg.extension_distance_mm,
+                      (float)cfg.lock_time_ms,
+                      (float)cfg.lock_time_ms);
   Serial.println();
   Serial.println("DEPLOY timing range under uncertainty:");
-  Serial.print(" Normal (ms): "); Serial.println(tDeploy);
+  Serial.print(" Nominal (ms): "); Serial.println(nominalDeploy);
   Serial.print("  Min (ms): "); Serial.println(minDeploy);
   Serial.print("  Max (ms): "); Serial.println(maxDeploy);
 
@@ -216,9 +222,10 @@ void runUncertaintyAnalysis() {
   Serial.print(MC_TRIALS);
   Serial.println(")");
 
+  unsigned long nominalRetract = nominalDeploy; // same simplified model
   Serial.println();
   Serial.println("RETRACT timing range under uncertainty:");
-  Serial.print(" Normal (ms): "); Serial.println(tRetract);
+  Serial.print(" Nominal (ms): "); Serial.println(nominalRetract);
   Serial.print("  Min (ms): "); Serial.println(minRetract);
   Serial.print("  Max (ms): "); Serial.println(maxRetract);
 
