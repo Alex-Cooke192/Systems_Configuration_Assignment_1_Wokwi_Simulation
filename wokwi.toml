@@ -1,0 +1,3 @@
+[wokwi]
+version = 1
+firmware = "build/arduino.avr.uno/electronic-safe.ino.hex"
