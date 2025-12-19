@@ -20,7 +20,7 @@ struct GearConfig {
   uint16_t pump_latency_ms;
   float actuator_speed_mm_per_100ms;
   uint16_t extension_distance_mm;
-  uint16_t lock_time_ms;
+  uint16_t lock_time_ms;           // used as both uplock-release and downlock-engage time in this simplified model
   uint16_t requirement_time_ms;
 };
 
@@ -70,31 +70,30 @@ unsigned long t_unlock_start = 0, t_unlock_end = 0;
 unsigned long t_op_start = 0, t_op_end = 0;
 
 /* --------------------------------------------------------------------------
-   Lock/Unlock primitives (instrumented)
-   Note: We treat UNLOCK as "release lock" and LOCK as "engage lock".
+   Actuator primitives (instrumented) - renamed to match landing-gear semantics
 ---------------------------------------------------------------------------*/
-void lock() {
+void engageDownlock() {
   t_lock_start = millis();
 
   lockServo.write(SERVO_LOCK_POS);
   safeState.lock();                 // keep state behavior (optional but harmless)
 
-  delay(cfg.lock_time_ms);          // model physical lock engage time
+  delay(cfg.lock_time_ms);          // model downlock engagement time
 
   t_lock_end = millis();
-  Serial.print("LOCK time (ms): ");
+  Serial.print("Downlock engage time (ms): ");
   Serial.println(t_lock_end - t_lock_start);
 }
 
-void unlock() {
+void releaseUplock() {
   t_unlock_start = millis();
 
   lockServo.write(SERVO_UNLOCK_POS);
 
-  delay(cfg.lock_time_ms);          // model physical lock release time
+  delay(cfg.lock_time_ms);          // model uplock release time
 
   t_unlock_end = millis();
-  Serial.print("UNLOCK time (ms): ");
+  Serial.print("Uplock release time (ms): ");
   Serial.println(t_unlock_end - t_unlock_start);
 }
 
@@ -121,7 +120,7 @@ unsigned long extensionTimeMs(float speed_mm_per_100ms, uint16_t distance_mm) {
 }
 
 /* --------------------------------------------------------------------------
-   Landing gear deploy/retract simulation using lock/unlock as endpoints
+   Landing gear deploy/retract simulation with clear logging
 ---------------------------------------------------------------------------*/
 void simulateDeploy() {
   Serial.println();
@@ -131,18 +130,26 @@ void simulateDeploy() {
   t_op_start = millis();
 
   // Pump latency
+  Serial.print("Pump latency (ms): ");
+  Serial.println(cfg.pump_latency_ms);
   delay(cfg.pump_latency_ms);
 
   // Release uplock
-  unlock();
+  releaseUplock();
 
   // Extension travel time
   unsigned long t_extend = extensionTimeMs(cfg.actuator_speed_mm_per_100ms,
                                           cfg.extension_distance_mm);
+  Serial.print("Actuator speed (mm/100ms): ");
+  Serial.println(cfg.actuator_speed_mm_per_100ms);
+  Serial.print("Extension distance (mm): ");
+  Serial.println(cfg.extension_distance_mm);
+  Serial.print("Travel time (ms): ");
+  Serial.println(t_extend);
   delay(t_extend);
 
   // Engage downlock
-  lock();
+  engageDownlock();
 
   t_op_end = millis();
   reportOpTime("DEPLOY", t_op_end - t_op_start);
@@ -156,18 +163,26 @@ void simulateRetract() {
   t_op_start = millis();
 
   // Pump latency
+  Serial.print("Pump latency (ms): ");
+  Serial.println(cfg.pump_latency_ms);
   delay(cfg.pump_latency_ms);
 
-  // Release downlock
-  unlock();
+  // Release downlock (simplified: same actuator function/timing)
+  releaseUplock();
 
   // Retraction travel time (same distance/speed model)
   unsigned long t_retract = extensionTimeMs(cfg.actuator_speed_mm_per_100ms,
                                            cfg.extension_distance_mm);
+  Serial.print("Actuator speed (mm/100ms): ");
+  Serial.println(cfg.actuator_speed_mm_per_100ms);
+  Serial.print("Retraction distance (mm): ");
+  Serial.println(cfg.extension_distance_mm);
+  Serial.print("Travel time (ms): ");
+  Serial.println(t_retract);
   delay(t_retract);
 
-  // Engage uplock
-  lock();
+  // Engage uplock (simplified: same engage function/timing)
+  engageDownlock();
 
   t_op_end = millis();
   reportOpTime("RETRACT", t_op_end - t_op_start);
@@ -287,7 +302,7 @@ void safeUnlockedLogic() {
     lcd.setCursor(0, 0);
     lcd.print("Deploying...");
 
-    // Treat "lock" transition as deploy action in this adapted demo
+    // Treat "lock transition" as deploy action in this adapted demo
     safeState.lock();
     simulateDeploy();
     showWaitScreen(100);
@@ -336,9 +351,9 @@ void setup() {
 
   // Ensure initial servo position matches saved state
   if (safeState.locked()) {
-    lock();
+    engageDownlock();
   } else {
-    unlock();
+    releaseUplock();
   }
 
   showStartupMessage();
