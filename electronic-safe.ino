@@ -204,6 +204,7 @@ void runUncertaintyAnalysis() {
 
   Serial.println();
   Serial.println("DEPLOY timing range under uncertainty:");
+  Serial.print(" Normal (ms): "); Serial.println(tDeploy);
   Serial.print("  Min (ms): "); Serial.println(minDeploy);
   Serial.print("  Max (ms): "); Serial.println(maxDeploy);
 
@@ -217,6 +218,7 @@ void runUncertaintyAnalysis() {
 
   Serial.println();
   Serial.println("RETRACT timing range under uncertainty:");
+  Serial.print(" Normal (ms): "); Serial.println(tRetract);
   Serial.print("  Min (ms): "); Serial.println(minRetract);
   Serial.print("  Max (ms): "); Serial.println(maxRetract);
 
