@@ -1,5 +1,6 @@
 /**
    Arduino Electronic Safe  -> Adapted for Landing Gear Deploy/Retract Timing Simulation
+   + 5% uncertainty Monte Carlo analysis (timing range + pass probability)
 
    Original Copyright (C) 2020, Uri Shaked.
    Released under the MIT License.
@@ -63,11 +64,32 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, KEYPAD_ROWS, KEYPAD_C
 SafeState safeState;
 
 /* --------------------------------------------------------------------------
-   Timing instrumentation
+   Timing instrumentation (for real-time simulated runs)
 ---------------------------------------------------------------------------*/
 unsigned long t_lock_start = 0, t_lock_end = 0;
 unsigned long t_unlock_start = 0, t_unlock_end = 0;
 unsigned long t_op_start = 0, t_op_end = 0;
+
+/* --------------------------------------------------------------------------
+   Uncertainty settings
+---------------------------------------------------------------------------*/
+static const float UNCERTAINTY = 0.05f;     // ±5%
+static const int   MC_TRIALS   = 500;       // number of Monte Carlo trials (compute-only, fast)
+
+/* --------------------------------------------------------------------------
+   Utility: uniform random float in [a, b]
+---------------------------------------------------------------------------*/
+float randUniform(float a, float b) {
+  // random() returns long in [min, max)
+  long r = random(0L, 1000000L);
+  float u = (float)r / 1000000.0f;
+  return a + (b - a) * u;
+}
+
+float applyUncertainty(float nominal) {
+  float factor = 1.0f + randUniform(-UNCERTAINTY, UNCERTAINTY);
+  return nominal * factor;
+}
 
 /* --------------------------------------------------------------------------
    Actuator primitives (instrumented) - renamed to match landing-gear semantics
@@ -120,11 +142,102 @@ unsigned long extensionTimeMs(float speed_mm_per_100ms, uint16_t distance_mm) {
 }
 
 /* --------------------------------------------------------------------------
-   Landing gear deploy/retract simulation with clear logging
+   Compute-only timing model (NO delays). Used for Monte Carlo.
+---------------------------------------------------------------------------*/
+unsigned long computeDeployTimeMs(float pump_latency_ms,
+                                 float actuator_speed_mm_per_100ms,
+                                 uint16_t distance_mm,
+                                 float uplock_release_ms,
+                                 float downlock_engage_ms) {
+  // guard against pathological speed
+  if (actuator_speed_mm_per_100ms < 0.001f) actuator_speed_mm_per_100ms = 0.001f;
+
+  unsigned long travel_ms = extensionTimeMs(actuator_speed_mm_per_100ms, distance_mm);
+
+  // Use rounding to nearest ms for float terms
+  unsigned long pump_ms   = (unsigned long)lroundf(pump_latency_ms);
+  unsigned long up_ms     = (unsigned long)lroundf(uplock_release_ms);
+  unsigned long down_ms   = (unsigned long)lroundf(downlock_engage_ms);
+
+  return pump_ms + up_ms + travel_ms + down_ms;
+}
+
+/* --------------------------------------------------------------------------
+   Monte Carlo analysis: prints timing range and pass probability
+---------------------------------------------------------------------------*/
+void runUncertaintyAnalysis() {
+  Serial.println();
+  Serial.println("=== 5% Uncertainty Analysis (Monte Carlo) ===");
+  Serial.print("Config: "); Serial.println(cfg.name);
+  Serial.print("Trials: "); Serial.println(MC_TRIALS);
+  Serial.print("Uncertainty: +/- "); Serial.print((int)(UNCERTAINTY * 100)); Serial.println("% (uniform)");
+
+  unsigned long minDeploy = 0xFFFFFFFFUL;
+  unsigned long maxDeploy = 0;
+  unsigned long minRetract = 0xFFFFFFFFUL;
+  unsigned long maxRetract = 0;
+
+  int passDeploy = 0;
+  int passRetract = 0;
+
+  for (int i = 0; i < MC_TRIALS; i++) {
+    float pump_ms = applyUncertainty((float)cfg.pump_latency_ms);
+    float speed   = applyUncertainty(cfg.actuator_speed_mm_per_100ms);
+    float lock_ms = applyUncertainty((float)cfg.lock_time_ms);
+
+    // In this simplified model: uplock release and downlock engage both use lock_ms
+    unsigned long tDeploy = computeDeployTimeMs(pump_ms, speed, cfg.extension_distance_mm, lock_ms, lock_ms);
+    unsigned long tRetract = tDeploy; // same timing model for retract here (same distance/speed/locks)
+
+    if (tDeploy < minDeploy) minDeploy = tDeploy;
+    if (tDeploy > maxDeploy) maxDeploy = tDeploy;
+
+    if (tRetract < minRetract) minRetract = tRetract;
+    if (tRetract > maxRetract) maxRetract = tRetract;
+
+    if (tDeploy <= cfg.requirement_time_ms) passDeploy++;
+    if (tRetract <= cfg.requirement_time_ms) passRetract++;
+  }
+
+  float pDeploy = (float)passDeploy / (float)MC_TRIALS;
+  float pRetract = (float)passRetract / (float)MC_TRIALS;
+
+  Serial.println();
+  Serial.println("DEPLOY timing range under uncertainty:");
+  Serial.print("  Min (ms): "); Serial.println(minDeploy);
+  Serial.print("  Max (ms): "); Serial.println(maxDeploy);
+
+  Serial.print("  Pass probability: ");
+  Serial.print(pDeploy, 3);
+  Serial.print(" (");
+  Serial.print(passDeploy);
+  Serial.print("/");
+  Serial.print(MC_TRIALS);
+  Serial.println(")");
+
+  Serial.println();
+  Serial.println("RETRACT timing range under uncertainty:");
+  Serial.print("  Min (ms): "); Serial.println(minRetract);
+  Serial.print("  Max (ms): "); Serial.println(maxRetract);
+
+  Serial.print("  Pass probability: ");
+  Serial.print(pRetract, 3);
+  Serial.print(" (");
+  Serial.print(passRetract);
+  Serial.print("/");
+  Serial.print(MC_TRIALS);
+  Serial.println(")");
+
+  Serial.println("=== End Uncertainty Analysis ===");
+  Serial.println();
+}
+
+/* --------------------------------------------------------------------------
+   Landing gear deploy/retract simulation with clear logging (REAL delays)
 ---------------------------------------------------------------------------*/
 void simulateDeploy() {
   Serial.println();
-  Serial.print("Running DEPLOY: ");
+  Serial.print("Running DEPLOY (real-time): ");
   Serial.println(cfg.name);
 
   t_op_start = millis();
@@ -157,7 +270,7 @@ void simulateDeploy() {
 
 void simulateRetract() {
   Serial.println();
-  Serial.print("Running RETRACT: ");
+  Serial.print("Running RETRACT (real-time): ");
   Serial.println(cfg.name);
 
   t_op_start = millis();
@@ -302,7 +415,6 @@ void safeUnlockedLogic() {
     lcd.setCursor(0, 0);
     lcd.print("Deploying...");
 
-    // Treat "lock transition" as deploy action in this adapted demo
     safeState.lock();
     simulateDeploy();
     showWaitScreen(100);
@@ -349,7 +461,10 @@ void setup() {
   Serial.print("Selected config: ");
   Serial.println(cfg.name);
 
-  // Ensure initial servo position matches saved state
+  // Seed RNG for Monte Carlo (best-effort on Arduino/Wokwi)
+  randomSeed(analogRead(A5) + micros());
+
+  // Ensure initial servo position matches saved state (not part of timing model)
   if (safeState.locked()) {
     engageDownlock();
   } else {
@@ -357,6 +472,9 @@ void setup() {
   }
 
   showStartupMessage();
+
+  // Run uncertainty analysis once at startup (compute-only, fast)
+  runUncertaintyAnalysis();
 }
 
 void loop() {
